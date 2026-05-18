@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Models (downloaded separately; do not commit weights)
+models/
+*.onnx
+*.pt
+*.safetensors
+
+# Local captures and telemetry
+*.jpg
+*.png
+*.mp4
+*.log
+*.jsonl
+telemetry/
+captures/
+
+# pytest
+.pytest_cache/

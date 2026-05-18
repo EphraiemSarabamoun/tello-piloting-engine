@@ -1,0 +1,15 @@
+[project]
+name = "tello"
+version = "0.1.0"
+description = "Autonomous Tello drone navigation"
+requires-python = ">=3.11"
+dependencies = [
+    "djitellopy>=2.5.0",
+    "opencv-python>=4.13.0.92",
+    "requests>=2.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+]
