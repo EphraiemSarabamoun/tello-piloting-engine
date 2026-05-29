@@ -3,14 +3,16 @@
     uv run python pilot.py list                 # show controller connection
     uv run python pilot.py monitor              # live named values (sign check)
     uv run python pilot.py fly                  # arm + fly (drone must be on Tello WiFi)
-    uv run python pilot.py fly --photos         # same, plus camera + photo button
+    uv run python pilot.py fly --fpv            # same + live FPV video window on loki
+    uv run python pilot.py fly --photos         # same + camera + X=photo button
 
 Controller input comes from the compiled Swift helper `gamepad-reader`
 (GameController framework), which streams JSON state on stdout. SDL/pygame can't
 read the pad on macOS (raw-HID is Input-Monitoring-gated); GameController can, but
-ONLY delivers input to a FOCUSED, foreground app. So `fly`/`monitor` must run in a
-Terminal window that stays frontmost on loki's display. If the window loses focus,
-the stream goes to zeros -> the drone HOVERS (neutral RC), it does not run away.
+ONLY delivers input to a FOCUSED, foreground window. So fly/monitor must run with
+the relevant window frontmost on loki. With --fpv, the FPV video window is the one
+to keep focused. If focus is lost the stream goes to zeros -> the drone HOVERS
+(neutral RC), it does not run away.
 
 Mode 2 layout:
     Left stick   vertical   -> throttle (up/down)
@@ -19,19 +21,10 @@ Mode 2 layout:
     Right stick  horizontal -> roll (strafe left/right)
 
 Buttons:
-    A      takeoff (from ARMED-on-ground, throttle centered, not just-landed)
-    B      land (graceful) -- also the one-button panic stop
-    X      photo (with --photos)
-    Y      flip forward (flying, battery > 50%)
-    Start  arm/disarm on the ground; while FLYING it lands (safe disarm)
-    LB     hold = precision speed     RB hold = boost speed
-    Back + Start held (~0.3s) = EMERGENCY motor cut (drone drops -- crash only)
-
-Safety: sticks inert unless FLYING; takeoff gated on ARMED + centered throttle +
-not-settling; first ~1.2s after takeoff are throttle-ramped; maneuvers run in a
-thread so the loop never blocks and EMERGENCY stays reachable; stream stall or
-controller disconnect while FLYING -> hover, then auto-land; battery warn <15%,
-force-land <10%; Ctrl-C / kill -> graceful land.
+    A takeoff   B land/panic   X photo (--photos)   Y flip fwd (batt>50)
+    Start arm/disarm (lands if FLYING)   LB precision / RB boost
+    Back+Start (~0.3s) = EMERGENCY motor cut (crash only)
+    In the FPV window: ESC or q stops + lands.
 """
 
 from __future__ import annotations
@@ -54,16 +47,16 @@ ABORT_EMERG = Path("/tmp/tello-emergency")  # `touch` over SSH -> motor cut (foc
 # ---- tunables -------------------------------------------------------------
 LOOP_HZ = 30
 DEADZONE = 0.12
-EXPO = 0.40                  # slightly more responsive mid-stick (was 0.45)
-MAX_RC = 50                  # roll/pitch cap -- bumped from 40 for more bite
-MAX_UD = 52                  # throttle cap (was 45)
-MAX_YAW = 70                 # yaw-rate cap (was 60)
+EXPO = 0.40                  # slightly more responsive mid-stick
+MAX_RC = 50                  # roll/pitch cap
+MAX_UD = 52                  # throttle cap
+MAX_YAW = 70                 # yaw-rate cap
 BOOST_RC = 80                # roll/pitch cap while RB held
 PRECISION_RC = 20            # roll/pitch cap while LB held
 TAKEOFF_THROTTLE_GUARD = 0.25
 SOFT_START_SEC = 1.2
 LAND_SETTLE_SEC = 2.5
-STREAM_STALE_SEC = 0.5       # no fresh line in this long -> treat as disconnected
+STREAM_STALE_SEC = 0.5
 FAILSAFE_LAND_AFTER = 1.5
 EMERGENCY_HOLD_SEC = 0.3
 RECONNECT_HOLDOFF = 0.25
@@ -111,7 +104,7 @@ class Maneuver:
         if self.active:
             return False
         self.name = name
-        self._pending = True  # close the start()->thread-scheduled race: active NOW
+        self._pending = True
 
         def _run():
             try:
@@ -193,17 +186,14 @@ class GamepadReader:
                     prev = self._last_update
                     self._gc_connected = gc
                     self._last_update = time.time()
-                    # rising edge of a (re)connection -> brief button holdoff
                     if gc and (self._last_update - prev) > STREAM_STALE_SEC:
                         self.reconnect_holdoff_until = self._last_update + RECONNECT_HOLDOFF
         finally:
-            # reader exited (EOF / crash / stop) -> immediately report disconnected
             with self._lock:
                 self._gc_connected = False
 
     @property
     def connected(self) -> bool:
-        """Connected AND receiving fresh frames (a stalled stream = disconnected)."""
         with self._lock:
             fresh = (time.time() - self._last_update) < STREAM_STALE_SEC
             return self._gc_connected and fresh
@@ -234,7 +224,7 @@ class GamepadReader:
         self._stop = True
         if self.proc:
             try:
-                self.proc.terminate()  # closes stdout -> _pump for-loop ends
+                self.proc.terminate()
             except Exception:
                 pass
         if self._thread is not None:
@@ -246,7 +236,7 @@ def cmd_list() -> int:
     gp = GamepadReader()
     if not gp.open():
         print("No controller stream. Is the pad connected and is this a FOCUSED,")
-        print("foreground Terminal on loki's display?")
+        print("foreground window on loki's display?")
         return 1
     print("Controller connected and streaming.")
     gp.close()
@@ -254,7 +244,6 @@ def cmd_list() -> int:
 
 
 def cmd_monitor(seconds: str = "30") -> int:
-    """Live named values -- use to confirm stick directions before flying."""
     gp = GamepadReader()
     if not gp.open():
         print("No controller stream. Focus this window on loki and retry.")
@@ -309,62 +298,58 @@ def _telem(line: str) -> None:
         pass
 
 
-def cmd_fly(photos: bool = False) -> int:
-    from djitellopy import Tello
+def _draw_hud(img, shared: dict) -> None:
+    import cv2
+    h, w = img.shape[:2]
+    st = shared.get("state", "?")
+    batt = shared.get("batt", 0)
+    lr, fb, ud, yaw = shared.get("rc", (0, 0, 0, 0))
+    conn = shared.get("conn", False)
+    color = (0, 255, 0) if st == "FLYING" else (0, 200, 255) if st in ("ARMED", "LANDING") else (200, 200, 200)
+    cv2.rectangle(img, (0, 0), (w, 38), (0, 0, 0), -1)
+    cv2.rectangle(img, (0, h - 30), (w, h), (0, 0, 0), -1)
+    cv2.putText(img, f"{st}   batt {batt}%   {'LINK' if conn else 'STALE'}",
+                (12, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+    cv2.putText(img, f"roll {lr:+d}  pitch {fb:+d}  thr {ud:+d}  yaw {yaw:+d}",
+                (12, h - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.66, (255, 255, 255), 2)
+    cx, cy = w // 2, h // 2
+    cv2.drawMarker(img, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 26, 1)
+    if isinstance(batt, int) and batt <= 20:
+        cv2.putText(img, "LOW BATTERY", (w // 2 - 95, 27),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
-    gp = GamepadReader()
-    if not gp.open():
-        print("No controller stream -- cannot fly. Focus this window on loki.")
-        return 1
-    print("Controller streaming.")
 
-    t = Tello()
+def _video_loop(frame_read, shared: dict, stop: dict) -> None:
+    """Main-thread FPV display (macOS requires cv2 GUI on the main thread)."""
+    import cv2
+    win = "Tello FPV  [ESC/q = land+stop]"
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win, 960, 720)
     try:
-        t.connect()
-    except Exception as e:
-        print(f"Cannot reach the Tello (192.168.10.1): {e}")
-        print("Join the TELLO-XXXXXX WiFi first (drone.py join-wifi).")
-        gp.close()
-        return 1
-    batt = t.get_battery()
-    print(f"Connected. battery={batt}%")
-    if batt < BATT_LAND:
-        print("Battery too low to fly. Charge first.")
-        gp.close()
-        return 1
-    if photos:
+        while not stop["flag"]:
+            frame = frame_read.frame
+            if frame is not None and getattr(frame, "size", 0) > 0:
+                img = frame.copy()
+                _draw_hud(img, shared)
+                cv2.imshow(win, img)
+            key = cv2.waitKey(15) & 0xFF
+            if key in (27, ord("q")):
+                stop["flag"] = True
+                break
+    finally:
         try:
-            t.streamon()
-            time.sleep(2.0)
-        except Exception as e:
-            print(f"  stream on failed (photos disabled): {e}")
-            photos = False
-
-    cap_dir = Path.home() / "captures" / time.strftime("%Y-%m-%d") / f"pilot-{time.strftime('%H%M%S')}"
-
-    state = "DISARMED"   # DISARMED -> ARMED -> FLYING -> LANDING -> ARMED
-    maneuver = Maneuver()
-    stop = {"flag": False}
-
-    def _sig(_signum, _frame):
-        stop["flag"] = True
-    signal.signal(signal.SIGINT, _sig)
-    signal.signal(signal.SIGTERM, _sig)
-
-    print()
-    print("READY. START to ARM, A to take off, B to land. Ctrl-C to bail.")
-    print("EMERGENCY = hold BACK+START.  *** KEEP THIS WINDOW FOCUSED ***")
-    print("If it loses focus the sticks read neutral so the drone HOVERS (won't run")
-    print("away), but buttons stop working until you refocus. Remote land/cut available.")
-    print()
-    # clear any stale kill-switch sentinels from a previous run
-    for s in (ABORT_LAND, ABORT_EMERG):
-        try:
-            s.unlink()
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
         except Exception:
             pass
-    _telem(f"--- fly session {time.strftime('%H:%M:%S')} batt={batt}% ---")
 
+
+def _control_loop(t, gp: GamepadReader, stop: dict, shared: dict, photos: bool, cap_dir: Path) -> None:
+    """The flight state machine + RC output. Runs on the main thread (no FPV) or a
+    daemon thread (FPV, where the video owns the main thread)."""
+    state = "DISARMED"   # DISARMED -> ARMED -> FLYING -> LANDING -> ARMED
+    maneuver = Maneuver()
+    batt = shared.get("batt", 0)
     period = 1.0 / LOOP_HZ
     last_batt_check = 0.0
     last_telem = 0.0
@@ -375,10 +360,15 @@ def cmd_fly(photos: bool = False) -> int:
     stale_since: float | None = None
 
     def status(rc, extra=""):
-        lr, fb, ud, yaw = rc
-        conn = "OK " if gp.connected else "STALE"
+        conn = gp.connected
+        shared["state"] = state
+        shared["batt"] = batt
+        shared["rc"] = rc
+        shared["conn"] = conn
+        shared["note"] = extra
         sys.stdout.write(
-            f"\r[{state:8s}] batt={batt:3d}% ctl={conn} rc=(lr={lr:+4d} fb={fb:+4d} ud={ud:+4d} yaw={yaw:+4d}) {extra}      "
+            f"\r[{state:8s}] batt={batt:3d}% ctl={'OK ' if conn else 'STALE'} "
+            f"rc=(lr={rc[0]:+4d} fb={rc[1]:+4d} ud={rc[2]:+4d} yaw={rc[3]:+4d}) {extra}      "
         )
         sys.stdout.flush()
 
@@ -386,8 +376,7 @@ def cmd_fly(photos: bool = False) -> int:
         while not stop["flag"]:
             t0 = time.time()
 
-            # --- remote kill switch (focus/controller-independent): I can
-            #     `touch /tmp/tello-emergency` or `/tmp/tello-abort` over SSH ---
+            # --- remote kill switch (focus/controller-independent) ---
             if ABORT_EMERG.exists():
                 print("\n[REMOTE EMERGENCY] cutting motors!")
                 try:
@@ -410,7 +399,6 @@ def cmd_fly(photos: bool = False) -> int:
                     state = "LANDING"
 
             active = maneuver.active
-
             if prev_active and not active:
                 if maneuver.name == "takeoff":
                     fly_since = maneuver.done_at
@@ -433,13 +421,13 @@ def cmd_fly(photos: bool = False) -> int:
             else:
                 emergency_held_since = None
 
-            # --- failsafe: stream stalled / controller gone (true disconnect;
-            #     a focus-loss instead streams zeros -> hover via the FLYING path) ---
+            # --- failsafe: true disconnect (stale stream). focus-loss instead
+            #     streams zeros -> hover via the FLYING path ---
             if not gp.connected:
                 if stale_since is None:
                     stale_since = t0
                 if state == "FLYING" and not active:
-                    t.send_rc_control(0, 0, 0, 0)  # hover (neutral)
+                    t.send_rc_control(0, 0, 0, 0)
                     if (t0 - stale_since) >= FAILSAFE_LAND_AFTER:
                         _trigger_land(maneuver, t, "FAILSAFE controller lost")
                         state = "LANDING"
@@ -448,12 +436,10 @@ def cmd_fly(photos: bool = False) -> int:
                 continue
             stale_since = None
 
-            # --- LANDING -> ARMED once settled ---
             if state == "LANDING" and not active and (t0 - land_done_at) >= LAND_SETTLE_SEC:
                 state = "ARMED"
                 print("\n  -> ARMED (settled)")
 
-            # --- battery watchdog ---
             if t0 - last_batt_check >= BATT_POLL_SEC:
                 try:
                     batt = t.get_battery()
@@ -464,7 +450,6 @@ def cmd_fly(photos: bool = False) -> int:
                     _trigger_land(maneuver, t, f"LOW BATTERY {batt}%")
                     state = "LANDING"
 
-            # --- buttons (edge-triggered; suppressed briefly after reconnect) ---
             if gp.buttons_ready and not active:
                 if gp.pressed("start"):
                     if state == "FLYING":
@@ -499,7 +484,6 @@ def cmd_fly(photos: bool = False) -> int:
                 if gp.pressed("y") and state == "FLYING" and batt > 50:
                     maneuver.start("flip", t.flip_forward)
 
-            # --- output: sticks only while FLYING and not mid-maneuver ---
             if not active:
                 if state == "FLYING":
                     cap = MAX_RC
@@ -540,10 +524,83 @@ def cmd_fly(photos: bool = False) -> int:
             print("\n[shutdown] landing (bounded)...")
             maneuver.join(FINAL_LAND_TIMEOUT)
             if maneuver.active:
-                print("  land link unresponsive -- relying on the Tello's onboard "
-                      "command-timeout failsafe to auto-land.")
+                print("  land link unresponsive -- relying on the Tello's onboard failsafe.")
+
+
+def cmd_fly(photos: bool = False, fpv: bool = False) -> int:
+    from djitellopy import Tello
+
+    gp = GamepadReader()
+    if not gp.open():
+        print("No controller stream -- cannot fly. Focus the flight window on loki.")
+        return 1
+    print("Controller streaming.")
+
+    t = Tello()
+    try:
+        t.connect()
+    except Exception as e:
+        print(f"Cannot reach the Tello (192.168.10.1): {e}")
+        print("Join the TELLO-XXXXXX WiFi first (drone.py join-wifi).")
+        gp.close()
+        return 1
+    batt = t.get_battery()
+    print(f"Connected. battery={batt}%")
+    if batt < BATT_LAND:
+        print("Battery too low to fly. Charge first.")
+        gp.close()
+        return 1
+
+    frame_read = None
+    if photos or fpv:
         try:
-            if photos:
+            t.streamon()
+            time.sleep(2.0)
+            if fpv:
+                frame_read = t.get_frame_read()
+        except Exception as e:
+            print(f"  stream on failed: {e}")
+            photos = fpv = False
+            frame_read = None
+
+    cap_dir = Path.home() / "captures" / time.strftime("%Y-%m-%d") / f"pilot-{time.strftime('%H%M%S')}"
+    stop = {"flag": False}
+    shared = {"state": "DISARMED", "batt": batt, "rc": (0, 0, 0, 0), "conn": True, "note": ""}
+
+    def _sig(_signum, _frame):
+        stop["flag"] = True
+    signal.signal(signal.SIGINT, _sig)
+    signal.signal(signal.SIGTERM, _sig)
+
+    print()
+    print("READY. START to ARM, A to take off, B to land. Ctrl-C to bail.")
+    print("EMERGENCY = hold BACK+START.  *** KEEP THE FLIGHT WINDOW FOCUSED ***")
+    print("Lose focus -> sticks read neutral so the drone HOVERS (won't run away);")
+    print("buttons resume on refocus. Remote land/cut available.")
+    if fpv:
+        print("FPV: keep the 'Tello FPV' VIDEO window focused while flying. ESC/q = land+stop.")
+    print()
+    for s in (ABORT_LAND, ABORT_EMERG):
+        try:
+            s.unlink()
+        except Exception:
+            pass
+    _telem(f"--- fly session {time.strftime('%H:%M:%S')} batt={batt}% fpv={fpv} ---")
+
+    try:
+        if fpv and frame_read is not None:
+            ctrl = threading.Thread(
+                target=_control_loop, args=(t, gp, stop, shared, photos, cap_dir), daemon=True
+            )
+            ctrl.start()
+            _video_loop(frame_read, shared, stop)  # main thread
+            stop["flag"] = True
+            ctrl.join(timeout=FINAL_LAND_TIMEOUT + 3.0)
+        else:
+            _control_loop(t, gp, stop, shared, photos, cap_dir)
+    finally:
+        try:
+            if photos or fpv:
                 t.streamoff()
         except Exception:
             pass
@@ -580,9 +637,9 @@ def main() -> int:
     if cmd == "list":
         return cmd_list()
     if cmd == "monitor":
-        return cmd_monitor(args[1] if len(args) > 1 else "30")
+        return cmd_monitor(args[1] if len(args) > 1 and not args[1].startswith("-") else "30")
     if cmd == "fly":
-        return cmd_fly(photos="--photos" in args)
+        return cmd_fly(photos="--photos" in args, fpv="--fpv" in args)
     print(__doc__)
     return 1
 
