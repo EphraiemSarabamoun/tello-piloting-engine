@@ -48,6 +48,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 READER_BIN = Path(os.environ.get("TELLO_GAMEPAD_BIN", str(HERE / "gamepad-reader")))
 TELEM_LOG = Path(os.environ.get("TELLO_TELEM_LOG", "/tmp/tello-pilot.log"))
+ABORT_LAND = Path("/tmp/tello-abort")       # `touch` over SSH -> graceful land (focus-independent)
+ABORT_EMERG = Path("/tmp/tello-emergency")  # `touch` over SSH -> motor cut (focus-independent)
 
 # ---- tunables -------------------------------------------------------------
 LOOP_HZ = 30
@@ -99,15 +101,17 @@ class Maneuver:
         self._thread: threading.Thread | None = None
         self.name: str | None = None
         self.done_at: float = 0.0
+        self._pending = False  # True from start() until fn finishes -> active synchronously
 
     @property
     def active(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        return self._pending or (self._thread is not None and self._thread.is_alive())
 
     def start(self, name: str, fn) -> bool:
         if self.active:
             return False
         self.name = name
+        self._pending = True  # close the start()->thread-scheduled race: active NOW
 
         def _run():
             try:
@@ -117,6 +121,7 @@ class Maneuver:
                 sys.stdout.flush()
             finally:
                 self.done_at = time.time()
+                self._pending = False
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
@@ -164,31 +169,37 @@ class GamepadReader:
 
     def _pump(self) -> None:
         assert self.proc and self.proc.stdout
-        for line in self.proc.stdout:
-            if self._stop:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            ev = d.get("event")
-            if ev == "connect":
-                continue
-            if ev == "disconnect":
+        try:
+            for line in self.proc.stdout:
+                if self._stop:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                ev = d.get("event")
+                if ev == "connect":
+                    continue
+                if ev == "disconnect":
+                    with self._lock:
+                        self._gc_connected = False
+                    continue
                 with self._lock:
-                    self._gc_connected = False
-                continue
+                    self._state = d
+                    gc = bool(d.get("connected", False))
+                    prev = self._last_update
+                    self._gc_connected = gc
+                    self._last_update = time.time()
+                    # rising edge of a (re)connection -> brief button holdoff
+                    if gc and (self._last_update - prev) > STREAM_STALE_SEC:
+                        self.reconnect_holdoff_until = self._last_update + RECONNECT_HOLDOFF
+        finally:
+            # reader exited (EOF / crash / stop) -> immediately report disconnected
             with self._lock:
-                self._state = d
-                self._gc_connected = bool(d.get("connected", False))
-                prev = self._last_update
-                self._last_update = time.time()
-            # rising edge of a (re)connection -> brief button holdoff
-            if self._gc_connected and (time.time() - prev) > STREAM_STALE_SEC:
-                self.reconnect_holdoff_until = time.time() + RECONNECT_HOLDOFF
+                self._gc_connected = False
 
     @property
     def connected(self) -> bool:
@@ -199,7 +210,8 @@ class GamepadReader:
 
     @property
     def buttons_ready(self) -> bool:
-        return time.time() >= self.reconnect_holdoff_until
+        with self._lock:
+            return time.time() >= self.reconnect_holdoff_until
 
     def _get(self, key: str, default: float = 0.0) -> float:
         with self._lock:
@@ -222,9 +234,11 @@ class GamepadReader:
         self._stop = True
         if self.proc:
             try:
-                self.proc.terminate()
+                self.proc.terminate()  # closes stdout -> _pump for-loop ends
             except Exception:
                 pass
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
 
 
 # ---- commands -------------------------------------------------------------
@@ -339,8 +353,16 @@ def cmd_fly(photos: bool = False) -> int:
 
     print()
     print("READY. START to ARM, A to take off, B to land. Ctrl-C to bail.")
-    print("EMERGENCY motor-cut = hold BACK+START. Keep THIS window focused while flying.")
+    print("EMERGENCY = hold BACK+START.  *** KEEP THIS WINDOW FOCUSED ***")
+    print("If it loses focus the sticks read neutral so the drone HOVERS (won't run")
+    print("away), but buttons stop working until you refocus. Remote land/cut available.")
     print()
+    # clear any stale kill-switch sentinels from a previous run
+    for s in (ABORT_LAND, ABORT_EMERG):
+        try:
+            s.unlink()
+        except Exception:
+            pass
     _telem(f"--- fly session {time.strftime('%H:%M:%S')} batt={batt}% ---")
 
     period = 1.0 / LOOP_HZ
@@ -363,6 +385,30 @@ def cmd_fly(photos: bool = False) -> int:
     try:
         while not stop["flag"]:
             t0 = time.time()
+
+            # --- remote kill switch (focus/controller-independent): I can
+            #     `touch /tmp/tello-emergency` or `/tmp/tello-abort` over SSH ---
+            if ABORT_EMERG.exists():
+                print("\n[REMOTE EMERGENCY] cutting motors!")
+                try:
+                    t.emergency()
+                except Exception:
+                    pass
+                try:
+                    ABORT_EMERG.unlink()
+                except Exception:
+                    pass
+                state = "DISARMED"
+                break
+            if ABORT_LAND.exists():
+                try:
+                    ABORT_LAND.unlink()
+                except Exception:
+                    pass
+                if state == "FLYING" and not maneuver.active:
+                    _trigger_land(maneuver, t, "REMOTE ABORT")
+                    state = "LANDING"
+
             active = maneuver.active
 
             if prev_active and not active:
