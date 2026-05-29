@@ -314,6 +314,13 @@ def _draw_hud(img, shared: dict) -> None:
                 (12, h - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.66, (255, 255, 255), 2)
     cx, cy = w // 2, h // 2
     cv2.drawMarker(img, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 26, 1)
+    # live stick boxes (left + right) -- prove input is reaching this window
+    lx, ly, rx, ry = shared.get("sticks", (0.0, 0.0, 0.0, 0.0))
+    for bx, vx, vy, lbl in ((58, lx, ly, "L"), (w - 58, rx, ry, "R")):
+        by, r = h - 70, 30
+        cv2.rectangle(img, (bx - r, by - r), (bx + r, by + r), (120, 120, 120), 1)
+        cv2.circle(img, (int(bx + vx * r), int(by - vy * r)), 6, (0, 255, 255), -1)
+        cv2.putText(img, lbl, (bx - r, by - r - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (120, 120, 120), 1)
     if isinstance(batt, int) and batt <= 20:
         cv2.putText(img, "LOW BATTERY", (w // 2 - 95, 27),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
@@ -435,6 +442,7 @@ def _control_loop(t, gp: GamepadReader, stop: dict, shared: dict, photos: bool, 
                 _sleep_rest(t0, period)
                 continue
             stale_since = None
+            shared["sticks"] = gp.sticks()  # live raw sticks for the HUD (and the focus check)
 
             if state == "LANDING" and not active and (t0 - land_done_at) >= LAND_SETTLE_SEC:
                 state = "ARMED"
