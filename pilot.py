@@ -54,10 +54,10 @@ ABORT_EMERG = Path("/tmp/tello-emergency")  # `touch` over SSH -> motor cut (foc
 # ---- tunables -------------------------------------------------------------
 LOOP_HZ = 30
 DEADZONE = 0.12
-EXPO = 0.45
-MAX_RC = 40                  # default roll/pitch cap (gentle indoor)
-MAX_UD = 45                  # throttle cap
-MAX_YAW = 60                 # yaw-rate cap
+EXPO = 0.40                  # slightly more responsive mid-stick (was 0.45)
+MAX_RC = 50                  # roll/pitch cap -- bumped from 40 for more bite
+MAX_UD = 52                  # throttle cap (was 45)
+MAX_YAW = 70                 # yaw-rate cap (was 60)
 BOOST_RC = 80                # roll/pitch cap while RB held
 PRECISION_RC = 20            # roll/pitch cap while LB held
 TAKEOFF_THROTTLE_GUARD = 0.25
