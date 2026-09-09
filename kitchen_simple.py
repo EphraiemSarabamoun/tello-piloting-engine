@@ -86,6 +86,7 @@ reached=false otherwise. If cyan is only visible as a distant glow, edge tint, o
 Reply ONLY: {"reached": true|false, "note": "<short>"}"""
 
 
+# Resolve the optional cloud-vision credential from the environment or shell-secret file.
 def _load_anthropic_key() -> str | None:
     k = os.environ.get("ANTHROPIC_API_KEY")
     if k:
@@ -104,6 +105,7 @@ def _load_anthropic_key() -> str | None:
 _ANTHROPIC_KEY = _load_anthropic_key()
 
 
+# Send a resized camera frame to the configured Ollama model; report arrival as false on encoding or request failure.
 def ask_vlm_ollama(frame_bgr, prompt: str, timeout: float = 15.0) -> dict:
     # Downsample to VLM_RESIZE before encode — keeps moondream accurate, cuts payload 3x.
     small = cv2.resize(frame_bgr, VLM_RESIZE, interpolation=cv2.INTER_AREA)
@@ -127,6 +129,7 @@ def ask_vlm_ollama(frame_bgr, prompt: str, timeout: float = 15.0) -> dict:
         return {"reached": False, "note": f"vlm_err:{e}"}
 
 
+# Send a camera frame to the cloud vision model and parse its arrival judgment, returning a failure note on errors.
 def ask_vlm_claude(frame_bgr, prompt: str, timeout: float = 15.0) -> dict:
     if _ANTHROPIC_KEY is None:
         return {"reached": False, "note": "no_anthropic_key"}
@@ -241,6 +244,7 @@ def ask_vlm_color(frame_bgr, prompt: str, timeout: float = 1.0, threshold: int |
     return {"reached": n >= thresh, "note": f"{target}_px={n} thresh={thresh}"}
 
 
+# Route the same arrival question to color detection, Ollama, or the cloud backend.
 def ask_vlm(frame_bgr, prompt: str, backend: str = "color", timeout: float = 15.0,
             color_threshold: int | None = None, color_debug: bool = False) -> dict:
     if backend == "color":
@@ -250,6 +254,7 @@ def ask_vlm(frame_bgr, prompt: str, backend: str = "color", timeout: float = 15.
     return ask_vlm_claude(frame_bgr, prompt, timeout)
 
 
+# Set kitchen lights to magenta and bedroom lights to cyan, reporting individual failures without stopping the loop.
 def setup_beacons(hue: HueBeacon) -> None:
     for lid in KITCHEN_LIGHTS:
         try: hue.set_light(lid, True, 100.0, xy=MAGENTA_XY)
@@ -259,6 +264,8 @@ def setup_beacons(hue: HueBeacon) -> None:
         except Exception as e: print(f"  hue cy fail {lid}: {e}")
 
 
+# Execute the outbound-and-back beacon mission while logging telemetry and supervising landing.
+# Perception runs asynchronously so model latency does not block the repeated velocity commands.
 def run(args: argparse.Namespace) -> int:
     # CLI overrides for drift compensation. Positive lr = right, negative lr = left.
     LR_BIAS = int(args.lr_bias)
@@ -297,6 +304,7 @@ def run(args: argparse.Namespace) -> int:
     aborted = False
     abort_reason = None
 
+    # Neutralize flight controls and attempt landing, using emergency motor stop if landing fails.
     def safe_land():
         try:
             t.send_rc_control(0, 0, 0, 0)
@@ -307,6 +315,7 @@ def run(args: argparse.Namespace) -> int:
             try: t.emergency()
             except Exception: pass
 
+    # Mark the mission interrupted, attempt landing immediately, and exit with failure.
     def sig(*_):
         nonlocal aborted, abort_reason
         aborted = True
@@ -567,6 +576,7 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+# Collect beacon, drift-correction, backend, and color-threshold settings for one mission.
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--home", default="Sirius")

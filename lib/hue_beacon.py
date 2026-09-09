@@ -51,6 +51,7 @@ WARM_WHITE_MIREK: int = 350
 class HueBeacon:
     """Bridge client. Loads ~/.hue-mcp/config.json at init."""
 
+    # Load the private Hue connection configuration and prepare authenticated bridge requests.
     def __init__(self, config_path: Path | str = CONFIG_PATH, timeout: float = DEFAULT_TIMEOUT) -> None:
         cfg_path = Path(config_path)
         cfg = json.loads(cfg_path.read_text())

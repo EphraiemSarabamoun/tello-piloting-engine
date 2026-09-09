@@ -81,6 +81,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+# Set up colored beacons, scan eight headings, and write a visibility report; dry-run skips drone commands but still configures lights.
 def run() -> int:
     ns = parse_args()
     if ns.home_beacon_light not in LIGHT_IDS:

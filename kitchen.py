@@ -89,6 +89,7 @@ class MissionState:
     abort_reason: Optional[str] = None
     final_battery: Optional[int] = None
 
+    # Start the phase clock and clear the corresponding consecutive-detection counter.
     def begin_phase(self, phase: Phase, now: float) -> None:
         self.phase = phase
         self.phase_start = now
@@ -144,6 +145,7 @@ class MissionState:
             return self._tick_return(decision)
         return ActionRequest("HOVER")
 
+    # Count consecutive goal detections before kitchen confirmation; otherwise request the planner-selected move.
     def _tick_outbound(self, decision: Optional[Decision]) -> ActionRequest:
         if decision is None:
             return ActionRequest("HOVER")
@@ -156,6 +158,7 @@ class MissionState:
         self.goal_streak = 0
         return self._action_to_request(decision.action)
 
+    # Count consecutive home detections before marking home found; otherwise request the planner-selected move.
     def _tick_return(self, decision: Optional[Decision]) -> ActionRequest:
         if decision is None:
             return ActionRequest("HOVER")
@@ -168,6 +171,7 @@ class MissionState:
         self.home_streak = 0
         return self._action_to_request(decision.action)
 
+    # Translate a planner action into configured movement increments, defaulting unknown actions to hover.
     def _action_to_request(self, action: str) -> ActionRequest:
         c = self.config
         mapping = {
@@ -185,6 +189,7 @@ class MissionState:
 # Adapter helpers (talk to real Tello / Hue). Kept simple so unit tests can mock at the boundary.
 
 
+# Execute a movement request and update the estimated pose; dry-run mode skips movement commands and LAND is handled by the caller.
 def _execute_action(tello: Any, pose: Pose, req: ActionRequest, dry_run: bool, sleep: Callable[[float], None]) -> None:
     if req.kind == "HOVER":
         sleep(1.0)
@@ -282,6 +287,7 @@ def run_mission(
     state.phase = Phase.INIT
     snap: Optional[dict] = None
 
+    # Read the injected or drone battery source; treat a failed drone query as zero battery.
     def get_battery() -> int:
         if battery_source is not None:
             return int(battery_source())
@@ -473,6 +479,7 @@ def run_mission(
     return _finalize_result(state, state.final_battery)
 
 
+# Read from an injected frame source or the drone reader, treating unavailable input as no frame.
 def _next_frame(fr: Any, frame_source: Optional[Callable[[], Any]]) -> Any:
     if frame_source is not None:
         try:
@@ -484,6 +491,7 @@ def _next_frame(fr: Any, frame_source: Optional[Callable[[], Any]]) -> Any:
     return _grab_frame(fr)
 
 
+# Repeatedly observe the camera, ask the planner, advance mission state, and execute requested movement until a stopping condition.
 def _run_navigation_loop(
     state: MissionState,
     vlm: Any,
@@ -557,6 +565,7 @@ def _run_navigation_loop(
             sleep(state.config.cycle_period_sec - dt)
 
 
+# Summarize final phase, abort reason, battery, estimated pose, and decision history length.
 def _finalize_result(state: MissionState, battery: Optional[int]) -> dict:
     return {
         "phase": state.phase.value,
@@ -576,6 +585,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+# Build mission settings from CLI arguments, validate the home beacon name, and run the mission.
 def main() -> None:
     ns = parse_args()
     config = MissionConfig(

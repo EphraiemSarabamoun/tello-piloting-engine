@@ -49,6 +49,7 @@ def _format_history(history: list["Decision"]) -> str:
 
 def _format_pose(pose: Any) -> tuple[float, float, float, float]:
     """Pull (x, y, z, yaw) out of either a dict or an object with attrs."""
+    # Read a numeric pose field from a mapping or object, using the default if absent or nonnumeric.
     def get(key: str, default: float = 0.0) -> float:
         if pose is None:
             return default
@@ -67,6 +68,7 @@ def _format_pose(pose: Any) -> tuple[float, float, float, float]:
 class VlmPlanner:
     """Goal-conditioned planner that calls a remote VLM each cycle."""
 
+    # Load the prompt template and store the model and inference/health endpoints.
     def __init__(
         self,
         prompt_template_path: str,
@@ -81,6 +83,7 @@ class VlmPlanner:
         self.endpoint = endpoint
         self.tags_endpoint = tags_endpoint
 
+    # Fill the navigation prompt with the goal, recent actions, rounded pose, battery, time budget, and allowed actions.
     def _render_prompt(
         self,
         goal_descriptor: str,
@@ -166,6 +169,7 @@ class VlmPlanner:
 
         return self._coerce(parsed)
 
+    # Normalize a model response into a decision, replacing unsupported actions with hover and bounding confidence.
     def _coerce(self, parsed: dict) -> Decision:
         raw = dict(parsed) if isinstance(parsed, dict) else {"response": parsed}
         action_in = str(raw.get("action", "HOVER")).strip().upper()

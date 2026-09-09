@@ -56,6 +56,7 @@ def current_ssid():
     return out.split(": ", 1)[1].strip() if ": " in out else None
 
 
+# Attempt to join the drone Wi-Fi network, then verify the currently associated network.
 def try_join():
     try:
         subprocess.run([NETWORKSETUP, "-setairportnetwork", IFACE, SSID],
@@ -65,6 +66,7 @@ def try_join():
     return current_ssid() == SSID
 
 
+# Send one UDP SDK command and wait for its response, returning None on timeout or socket failure.
 def sdk(sock, cmd, timeout=3.0):
     sock.settimeout(timeout)
     try:
@@ -79,6 +81,7 @@ def say(msg):
     subprocess.Popen(["/usr/bin/say", msg])
 
 
+# Watch for the drone network, announce SDK readiness, and maintain a bounded ready window; after an unused window, pause until a join attempt fails.
 def main():
     subprocess.run([NETWORKSETUP, "-setairportpower", IFACE, "on"],
                    capture_output=True)

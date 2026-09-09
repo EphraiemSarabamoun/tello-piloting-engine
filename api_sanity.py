@@ -11,6 +11,7 @@ import time
 from djitellopy import Tello
 
 
+# Perform a short real hover/forward/hover flight to check RC command behavior, then attempt landing with an emergency fallback.
 def main() -> int:
     t = Tello()
     t.connect()

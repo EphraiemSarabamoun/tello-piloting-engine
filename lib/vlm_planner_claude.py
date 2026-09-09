@@ -36,6 +36,7 @@ class VlmPlannerClaude:
         if not self.api_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
 
+    # Send a small real inference request and report whether the service returns HTTP 200.
     def health_check(self, timeout: float = 5.0) -> bool:
         try:
             r = requests.post(
@@ -52,6 +53,7 @@ class VlmPlannerClaude:
         except Exception:
             return False
 
+    # Send the camera image and navigation context for a decision; use hover for HTTP/JSON decoding failures or unsupported actions.
     def decide(self, frame_bgr, goal_descriptor: str, history: list, pose, battery_pct: int,
                phase_elapsed_sec: float, max_phase_sec: float, timeout: float = 30.0) -> Decision:
         _, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])

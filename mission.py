@@ -57,6 +57,7 @@ Reply ONLY in this exact JSON shape, no extra text:
 """
 
 
+# Send a JPEG camera frame and mission context to the configured vision model, then decode its JSON decision.
 def query_vlm(frame_bgr, cycle, max_cycles, battery, goal, timeout=45):
     _, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
     b64 = base64.b64encode(buf).decode()
@@ -74,6 +75,7 @@ def query_vlm(frame_bgr, cycle, max_cycles, battery, goal, timeout=45):
     return json.loads(text)
 
 
+# Issue the requested fixed-size flight movement; return False for LAND so the caller ends the mission.
 def execute(t, action):
     a = action.upper()
     if a == "HOVER":
@@ -97,6 +99,7 @@ def execute(t, action):
     return True
 
 
+# Attempt landing and fall back to emergency motor stop if the landing command fails.
 def safe_land(t):
     try:
         t.land()
@@ -107,6 +110,7 @@ def safe_land(t):
         except Exception as e2: print(f"[safe_land] emergency failed: {e2}")
 
 
+# Run a bounded sequence of camera-to-model flight decisions, saving observations and attempting landing when the loop ends.
 def main():
     max_cycles = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     goal = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_GOAL

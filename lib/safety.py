@@ -51,6 +51,7 @@ def safe_land(tello: Any, log: Any, reason: str) -> None:
 class SafetyMonitor:
     """Pre-takeoff and in-flight predicates."""
 
+    # Store the battery, time, camera-staleness, and estimated-distance limits used by the checks.
     def __init__(
         self,
         min_battery_takeoff: int = 50,
@@ -70,6 +71,7 @@ class SafetyMonitor:
             return False, f"battery {battery}% < min_takeoff {self.min_battery_takeoff}%"
         return True, None
 
+    # Return the first battery, phase-time, camera-staleness, or estimated-distance violation; otherwise report no violation.
     def check_in_flight(
         self,
         battery: int,
@@ -96,6 +98,7 @@ class SafetyMonitor:
 
     def install_landing_signal_handler(self, tello: Any, log: Any) -> None:
         """SIGINT/SIGTERM → send_rc_control(0,0,0,0) → land → exit. Mirrors follow.FaceFollower."""
+        # Record the interrupt when possible, attempt landing, and terminate the process.
         def handler(signum, _frame):
             reason = f"signal_{signum}"
             if log is not None:

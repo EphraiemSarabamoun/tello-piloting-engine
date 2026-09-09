@@ -27,6 +27,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+# Run the kitchen mission with shorter phase and distance limits, returning success only for a non-aborted landing/post-flight result.
 def run() -> int:
     ns = parse_args()
     if ns.home_beacon_light not in LIGHT_IDS:

@@ -17,6 +17,7 @@ def _iso_now() -> str:
 class FlightLog:
     """Writes ~/captures/YYYY-MM-DD/tello-<run_id>/kitchen.jsonl + frame jpegs."""
 
+    # Create this flight's capture directory and append-only JSON event log, then record its start.
     def __init__(self, run_id: Optional[str] = None, root: Optional[Path | str] = None) -> None:
         self.run_id = run_id or time.strftime("%Y%m%d-%H%M%S")
         day = time.strftime("%Y-%m-%d")
@@ -28,6 +29,7 @@ class FlightLog:
         self._closed = False
         self.event("init", "run_start", run_id=self.run_id, run_dir=str(self.run_dir))
 
+    # Append and flush one timestamped flight event unless the log is already closed.
     def event(self, phase: str, kind: str, **fields: Any) -> None:
         if self._closed:
             return
@@ -45,6 +47,7 @@ class FlightLog:
         self.event(phase, "frame", cycle=cycle, frame_path=str(path))
         return str(path)
 
+    # Record the end of the run and close the event stream once.
     def close(self) -> None:
         if self._closed:
             return
@@ -57,6 +60,7 @@ class FlightLog:
     def __enter__(self) -> "FlightLog":
         return self
 
+    # Record an escaping exception when possible and close the log on leaving the context.
     def __exit__(self, exc_type, exc, tb) -> None:
         if exc is not None:
             try:

@@ -44,11 +44,13 @@ KP_UD = 40
 KP_FB = 130
 
 
+# Limit a control value to the allowed interval before it becomes a movement command.
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
 class FaceFollower:
+    # Load the face detector and initialize the tracking errors and flight state.
     def __init__(self):
         self.tello = Tello()
         if not os.path.exists(MODEL_PATH):
@@ -61,6 +63,7 @@ class FaceFollower:
         self.ey_s = 0.0
         self.esz_s = 0.0
 
+    # Send neutral controls and attempt landing, falling back to emergency motor stop on failure.
     def safe_land(self):
         try:
             self.tello.send_rc_control(0, 0, 0, 0)
@@ -73,6 +76,7 @@ class FaceFollower:
             except Exception as e2: print(f"[safe_land] emergency failed: {e2}")
         self.airborne = False
 
+    # Register interrupt handlers that attempt landing before the process exits.
     def install_signal_handler(self):
         def handler(signum, _frame):
             print(f"\n[signal {signum}] landing")
@@ -81,6 +85,7 @@ class FaceFollower:
         signal.signal(signal.SIGINT, handler)
         signal.signal(signal.SIGTERM, handler)
 
+    # Detect faces in the current frame and return the bounding box of the largest one.
     def detect(self, frame):
         h, w = frame.shape[:2]
         self.det.setInputSize((w, h))
@@ -91,6 +96,7 @@ class FaceFollower:
         x, y, fw, fh = best[:4].astype(int)
         return x, y, fw, fh
 
+    # Turn smoothed face position and size errors into flight controls; hover or scan after losing the target.
     def step(self, frame, now):
         h, w = frame.shape[:2]
         face = self.detect(frame)
@@ -134,6 +140,7 @@ class FaceFollower:
                 cv2.imwrite("/tmp/follow_view.jpg", frame)
                 self.last_save_t = now
 
+    # Connect, check battery, take off, and run face tracking until its time or battery limit, with landing cleanup around the loop.
     def run(self, duration_sec=60.0):
         self.tello.connect()
         bat = self.tello.get_battery()
@@ -212,6 +219,7 @@ def validate_on_image(path):
     print(f"  → annotated {out}")
 
 
+# Choose image-only detector validation or a timed live face-follow session from the CLI arguments.
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--validate":
         for p in sys.argv[2:]:

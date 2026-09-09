@@ -34,12 +34,14 @@ TELLO_DOCK_URL = os.environ.get("TELLO_DOCK_URL", "http://tello-dock.local")
 TELLO_SSID = os.environ.get("TELLO_SSID", "")
 
 
+# Create a drone client and establish its SDK connection.
 def _connect() -> Tello:
     t = Tello()
     t.connect()
     return t
 
 
+# Call the configured dock HTTP endpoint and decode its JSON response.
 def _dock_get(path: str, timeout: float = 10.0) -> dict:
     url = TELLO_DOCK_URL.rstrip("/") + path
     with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -70,6 +72,7 @@ def power_off() -> None:
     print(f"  dock: {_dock_get('/off')}")
 
 
+# Find the macOS Wi-Fi interface name from hardware-port output, or return an empty name.
 def _wifi_device() -> str:
     import subprocess
 
@@ -128,6 +131,7 @@ def boot_fly() -> None:
     first_flight()
 
 
+# Connect to the drone and print battery, temperature, and height telemetry.
 def battery() -> None:
     t = _connect()
     print(f"Battery: {t.get_battery()}%")
@@ -135,6 +139,7 @@ def battery() -> None:
     print(f"Height:  {t.get_height()}cm")
 
 
+# Start the camera stream, save a frame, and stop streaming on the normal completion path.
 def snapshot(out: str = "tello_snap.jpg") -> None:
     import cv2
 
@@ -147,6 +152,7 @@ def snapshot(out: str = "tello_snap.jpg") -> None:
     print(f"Wrote {out} ({frame.shape[1]}x{frame.shape[0]})")
 
 
+# Take off, hover briefly, and land; this command performs a real flight.
 def takeoff_land() -> None:
     t = _connect()
     print(f"Pre-flight battery: {t.get_battery()}%")
@@ -197,6 +203,7 @@ COMMANDS = {
 }
 
 
+# Resolve the requested drone command and pass the remaining CLI arguments to its handler.
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print("Commands:", ", ".join(COMMANDS))

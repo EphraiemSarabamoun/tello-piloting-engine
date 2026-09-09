@@ -57,6 +57,7 @@ cyan=true only if you can clearly see one or more bright cyan light sources.
 """
 
 
+# Ask the configured vision model whether the provided frame contains each beacon color; return failure details when unavailable.
 def label_frame(frame_bgr) -> dict:
     import base64
     import requests
@@ -118,6 +119,7 @@ def verify_hue_state(hue: HueBeacon) -> None:
         print(f"  {name:11s} {room:7s} bri={bri} xy={xy} -> {tag}")
 
 
+# Configure beacons and perform a timed RC flight with snapshots, then classify saved frames and write the visibility report.
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"out_dir={OUT_DIR}")

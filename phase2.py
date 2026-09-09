@@ -27,6 +27,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+# Fly or simulate a fixed out-and-back route and assess return distance from commanded-motion bookkeeping, not measured position.
 def run() -> int:
     ns = parse_args()
     pose = Pose()

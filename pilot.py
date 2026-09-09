@@ -90,6 +90,7 @@ class Maneuver:
     """Runs one blocking Tello command (takeoff/land/flip) in a daemon thread so
     the control loop never stalls and the EMERGENCY combo stays reachable."""
 
+    # Initialize the background maneuver slot and its completion timestamp.
     def __init__(self):
         self._thread: threading.Thread | None = None
         self.name: str | None = None
@@ -100,12 +101,14 @@ class Maneuver:
     def active(self) -> bool:
         return self._pending or (self._thread is not None and self._thread.is_alive())
 
+    # Start one background maneuver only when none is active, keeping it marked pending until the callback finishes.
     def start(self, name: str, fn) -> bool:
         if self.active:
             return False
         self.name = name
         self._pending = True
 
+        # Execute the maneuver callback, report errors, and always record completion and clear the pending flag.
         def _run():
             try:
                 fn()
@@ -130,6 +133,7 @@ class GamepadReader:
     """Reads controller state from the `gamepad-reader` subprocess (one JSON line
     per ~20ms). GC convention: stick up=+1, right=+1. Names, not indices."""
 
+    # Initialize the controller process, synchronized input state, and reconnect tracking.
     def __init__(self, binary: Path = READER_BIN):
         self.binary = binary
         self.proc: subprocess.Popen | None = None
@@ -142,6 +146,7 @@ class GamepadReader:
         self._stop = False
         self.reconnect_holdoff_until = 0.0
 
+    # Start the gamepad reader process and wait briefly for a connected input stream.
     def open(self) -> bool:
         if not self.binary.exists():
             print(f"gamepad-reader not found at {self.binary}. Build it:")
@@ -160,6 +165,7 @@ class GamepadReader:
             time.sleep(0.05)
         return self.connected
 
+    # Consume JSON controller events, updating shared state and imposing a holdoff after stale-stream reconnection.
     def _pump(self) -> None:
         assert self.proc and self.proc.stdout
         try:
@@ -220,6 +226,7 @@ class GamepadReader:
         self._prev_buttons[name] = now
         return now and not was
 
+    # Request reader shutdown, terminate its child process, and briefly wait for the pump thread.
     def close(self) -> None:
         self._stop = True
         if self.proc:
@@ -243,6 +250,7 @@ def cmd_list() -> int:
     return 0
 
 
+# Display and periodically save gamepad readings for the requested duration, then close the controller reader.
 def cmd_monitor(seconds: str = "30") -> int:
     gp = GamepadReader()
     if not gp.open():
@@ -281,6 +289,7 @@ def cmd_monitor(seconds: str = "30") -> int:
     return 0
 
 
+# Attempt neutral controls and request a background landing maneuver.
 def _trigger_land(maneuver: Maneuver, t, why: str) -> None:
     try:
         t.send_rc_control(0, 0, 0, 0)
@@ -298,6 +307,7 @@ def _telem(line: str) -> None:
         pass
 
 
+# Draw flight state, battery, command values, and stick positions onto the video frame.
 def _draw_hud(img, shared: dict) -> None:
     import cv2
     h, w = img.shape[:2]
@@ -366,6 +376,7 @@ def _control_loop(t, gp: GamepadReader, stop: dict, shared: dict, photos: bool, 
     prev_active = False
     stale_since: float | None = None
 
+    # Publish the latest control state to the video HUD and terminal status line.
     def status(rc, extra=""):
         conn = gp.connected
         shared["state"] = state
@@ -535,6 +546,7 @@ def _control_loop(t, gp: GamepadReader, stop: dict, shared: dict, photos: bool, 
                 print("  land link unresponsive -- relying on the Tello's onboard failsafe.")
 
 
+# Connect the controller and drone, prepare optional video, and run the manual flight controller with resource cleanup.
 def cmd_fly(photos: bool = False, fpv: bool = False) -> int:
     from djitellopy import Tello
 
@@ -626,6 +638,7 @@ def _sleep_rest(t0: float, period: float) -> None:
         time.sleep(period - dt)
 
 
+# Save a current camera frame as a timestamped JPEG in the flight capture directory.
 def _snap(t, cap_dir: Path) -> None:
     import cv2
     cap_dir.mkdir(parents=True, exist_ok=True)
@@ -639,6 +652,7 @@ def _snap(t, cap_dir: Path) -> None:
         print(f"\n  photo error: {e}")
 
 
+# Dispatch the command-line choice to controller discovery, input monitoring, or manual flight.
 def main() -> int:
     args = sys.argv[1:]
     cmd = args[0] if args else "list"
